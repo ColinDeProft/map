@@ -1,163 +1,128 @@
 package com.example.mapboxapp
+
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mapbox.bindgen.Value
+import com.mapbox.geojson.Feature
 import com.mapbox.geojson.Point
-import com.mapbox.maps.RenderedQueryGeometry
-import com.mapbox.maps.RenderedQueryOptions
+import com.mapbox.maps.SourceQueryOptions
+import com.mapbox.maps.extension.compose.MapEffect
 import com.mapbox.maps.extension.compose.MapboxMap
 import com.mapbox.maps.extension.compose.animation.viewport.rememberMapViewportState
 import com.mapbox.maps.extension.compose.rememberMapState
 import com.mapbox.maps.extension.compose.style.MapStyle
-import com.mapbox.maps.extension.style.style
 import kotlinx.coroutines.launch
 
-public class MainActivity : ComponentActivity() {
+class MainActivity : ComponentActivity() {
+
     companion object {
         private const val TAG = "MapboxFeatureQuery"
     }
 
+    private fun distanceBetween(p1: Point, p2: Point): Double {
+        val results = FloatArray(1)
+        android.location.Location.distanceBetween(
+            p1.latitude(), p1.longitude(),
+            p2.latitude(), p2.longitude(),
+            results
+        )
+        return results[0].toDouble()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Log.i(TAG, "MainActivity onCreate - Starting app")
+
         setContent {
             var selectedFeatureName by remember { mutableStateOf<String?>(null) }
             val mapState = rememberMapState()
             val coroutineScope = rememberCoroutineScope()
 
             Box(modifier = Modifier.fillMaxSize()) {
+                val mapboxMapRef = remember { mutableStateOf<com.mapbox.maps.MapboxMap?>(null) }
                 MapboxMap(
                     modifier = Modifier.fillMaxSize(),
                     mapState = mapState,
                     mapViewportState = rememberMapViewportState {
                         setCameraOptions {
-                            zoom(12.0) // Closer zoom for city view
-                            center(Point.fromLngLat(12.4964, 41.9028)) // Rome coordinates
-                            pitch(0.0)
-                            bearing(0.0)
+                            zoom(12.0)
+                            center(Point.fromLngLat(12.4964, 41.9028)) // Rome
                         }
                     },
                     style = {
-                        MapStyle(style = "mapbox://styles/col123/cmdaatylg002301sabcel06cs")
+                        MapStyle("mapbox://styles/col123/cmdaatylg002301sabcel06cs")
                     },
                     onMapClickListener = { clickedPoint ->
-                        Log.i(TAG, "Map clicked at: lat=${clickedPoint.latitude()}, lng=${clickedPoint.longitude()}")
-
                         coroutineScope.launch {
+                            val mapboxMap = mapboxMapRef.value
+                            if (mapboxMap == null) {
+                                Log.i(TAG, "MapboxMap reference not initialized yet")
+                                return@launch
+                            }
                             try {
-                                Log.i(TAG, "Starting feature query...")
-
-                                // Get screen coordinates
-                                val screenCoordinate = mapState.pixelForCoordinate(clickedPoint)
-                                Log.i(TAG, "Screen coordinate: x=${screenCoordinate.x}, y=${screenCoordinate.y}")
-
-                                // Query rendered features at the clicked point (all layers)
-                                val queryResult = mapState.queryRenderedFeatures(
-                                    geometry = RenderedQueryGeometry(screenCoordinate),
-                                    options = RenderedQueryOptions(
-                                        listOf("poi-label"), // Query all layers
-                                        null
+                                mapboxMap.querySourceFeatures(
+                                    sourceId = "composite",
+                                    options = SourceQueryOptions(
+                                        listOf("poi_label"),
+                                        Value.valueOf(true) // no filter - query all features in layer
                                     )
-                                )
+                                ) { result ->
+                                    if (result.isValue) {
+                                        val features = result.value
+                                        var closestFeature: Feature? = null
+                                        var closestDistance = Double.MAX_VALUE
 
-                                Log.i(TAG, "Query completed. Checking result...")
-
-                                // Handle the Expected result
-                                queryResult.value?.let { queriedRenderedFeatures ->
-                                    Log.i(TAG, "Query successful! Found ${queriedRenderedFeatures.size} features")
-
-                                    // Iterate through results to find a feature with a "name" property
-                                    for ((index, feature) in queriedRenderedFeatures.withIndex()) {
-                                        Log.i(TAG, "Feature $index:")
-                                        Log.i(TAG, "  - Layer ID: ${feature.queriedFeature.source}")
-                                        Log.i(TAG, "  - Source layer: ${feature.queriedFeature.sourceLayer}")
-
-                                        val properties = feature.queriedFeature.feature.properties()
-                                        Log.i(TAG, "  - Properties: $properties")
-
-                                        if (properties != null) {
-                                            val propertyKeys = properties.entrySet().map { it.key }
-                                            Log.i(TAG, "  - Property keys: $propertyKeys")
-
-                                            if (properties.has("name")) {
-                                                val nameProperty = properties.get("name")
-                                                Log.i(TAG, "  - Found 'name' property: $nameProperty")
-
-                                                selectedFeatureName = when {
-                                                    nameProperty?.isJsonPrimitive == true -> {
-                                                        val name = nameProperty.asString
-                                                        Log.i(TAG, "  - Extracted name as string: '$name'")
-                                                        name
-                                                    }
-                                                    nameProperty != null -> {
-                                                        val name = nameProperty.toString().replace("\"", "")
-                                                        Log.i(TAG, "  - Extracted name as toString: '$name'")
-                                                        name
-                                                    }
-                                                    else -> {
-                                                        Log.i(TAG, "  - Name property was null")
-                                                        null
-                                                    }
-                                                }
-
-                                                if (selectedFeatureName != null) {
-                                                    Log.i(TAG, "SUCCESS: Setting selected feature name to: '$selectedFeatureName'")
-                                                    break // Found a feature with name, stop looking
-                                                }
-                                            } else {
-                                                Log.i(TAG, "  - No 'name' property found")
-
-                                                // Log other common name properties to help debug
-                                                val commonNameProps = listOf("name", "name_en", "name:en", "title", "label")
-                                                for (prop in commonNameProps) {
-                                                    if (properties.has(prop)) {
-                                                        Log.i(TAG, "  - Found alternative name property '$prop': ${properties.get(prop)}")
-                                                    }
+                                        features?.forEach { featureWithMetadata ->
+                                            val feature = featureWithMetadata.queriedFeature.feature
+                                            val geometry = feature.geometry()
+                                            if (geometry is Point) {
+                                                val distance = distanceBetween(clickedPoint, geometry)
+                                                if (distance < closestDistance && feature.hasProperty("name")) {
+                                                    closestDistance = distance
+                                                    closestFeature = feature
                                                 }
                                             }
-                                        } else {
-                                            Log.i(TAG, "  - Properties object was null")
                                         }
+                                        selectedFeatureName = closestFeature?.getStringProperty("name")
+                                        Log.i(TAG, "Selected closest feature: $selectedFeatureName (distance: $closestDistance meters)")
+                                    } else {
+                                        Log.i(TAG, "querySourceFeatures error: ${result.error}")
                                     }
-
-                                    // If no feature with name found, clear the selection
-                                    if (selectedFeatureName == null) {
-                                        Log.i(TAG, "No features with 'name' property found. Clearing selection.")
-                                    }
-
-                                } ?: run {
-                                    // Query failed, clear selection
-                                    Log.e(TAG, "Query failed! Error: ${queryResult.error}")
-                                    selectedFeatureName = null
                                 }
-
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Exception during feature query: ${e.message}", e)
-                                selectedFeatureName = null
+                            } catch (ex: Exception) {
+                                Log.i(TAG, "Exception querying source features: ${ex.message}", ex)
                             }
                         }
-                        false
+                        false // Return false to indicate event not consumed
                     }
-                )
+                ) {
+                    // **This is key:** place MapEffect *inside* the MapboxMap scope!
+                    MapEffect { mapView ->
+                        mapboxMapRef.value = mapView.mapboxMap
+                    }
 
-                // Display box in the center when a feature is selected
+//                    MapEffect(mapState) { mapView ->
+//                        val mapboxMap = mapView.mapboxMap
+//                        mapboxMap.getStyle { style ->
+//                            val sources = style.styleSources
+//                            Log.i(TAG, "Sources in style: ${sources.first()}")
+//                        }
+//                        mapboxMapRef.value = mapboxMap
+//                    }
+
+                }
+                // UI to show selected feature name
                 selectedFeatureName?.let { name ->
-                    Log.i(TAG, "Displaying feature name box: '$name'")
                     Card(
                         modifier = Modifier
                             .align(Alignment.Center)
@@ -165,9 +130,7 @@ public class MainActivity : ComponentActivity() {
                             .widthIn(min = 200.dp, max = 300.dp),
                         elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
                         shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color.White
-                        )
+                        colors = CardDefaults.cardColors(containerColor = Color.White)
                     ) {
                         Column(
                             modifier = Modifier.padding(16.dp),
